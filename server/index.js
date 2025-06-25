@@ -25,24 +25,40 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// CORS configuration
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "https://ccr-collegecompass-projects.vercel.app",
+  process.env.NODE_ENV === "development" && "http://localhost:5173",
+  process.env.NODE_ENV === "development" && "http://localhost:3000",
+].filter(Boolean); // Remove undefined/null values
+
 app.use(
   cors({
-    origin:
-      process.env.NODE_ENV === "production"
-        ? process.env.FRONTEND_URL
-        : ["http://localhost:5173", "http://localhost:3000"],
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
+// Handle preflight requests
+app.options("*", cors());
+
+// Middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Create uploads directory if it doesn't exist
+// Create uploads directory
 const uploadsDir = path.join(__dirname, "Uploads");
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.mkdirSync(UploadsDir, { recursive: true });
 }
 
 // Serve static files
@@ -65,13 +81,16 @@ app.get("/api/health", (req, res) => {
     status: "OK",
     message: "College Compass API is running",
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development",
+    frontendUrl: process.env.FRONTEND_URL || "Not set",
   });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error(`[ERROR] ${new Date().toISOString()} - ${err.stack}`);
   res.status(500).json({
+    success: false,
     message: "Something went wrong!",
     error:
       process.env.NODE_ENV === "development"
@@ -82,16 +101,22 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use("*", (req, res) => {
-  res.status(404).json({ message: "Route not found" });
+  console.warn(
+    `[WARN] ${new Date().toISOString()} - 404: Route ${
+      req.originalUrl
+    } not found`
+  );
+  res.status(404).json({ success: false, message: "Route not found" });
 });
 
 // Connect to MongoDB, initialize Mega, and start server
 const startServer = async () => {
   try {
     // Connect to MongoDB
-    await mongoose.connect(
-      process.env.MONGODB_URI || "mongodb://localhost:27017/college-compass"
-    );
+    await mongoose.connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
     console.log("✅ Connected to MongoDB");
 
     // Initialize Mega
@@ -99,8 +124,9 @@ const startServer = async () => {
       await initMega();
       console.log("✅ Mega storage initialized");
     } catch (megaError) {
-      console.error("⚠️ Failed to initialize Mega storage:", megaError.message);
-      // Continue server startup even if Mega fails
+      console.error(
+        `⚠️ Failed to initialize Mega storage: ${megaError.message}`
+      );
     }
 
     // Start server
@@ -111,7 +137,13 @@ const startServer = async () => {
           process.env.FRONTEND_URL || "http://localhost:5173"
         }`
       );
-      console.log(`🔧 API URL: http://localhost:${PORT}`);
+      console.log(
+        `🔧 API URL: ${
+          process.env.NODE_ENV === "production"
+            ? "https://ccr-backend.onrender.com"
+            : `http://localhost:${PORT}`
+        }`
+      );
       console.log(
         `👨‍💼 Admin Panel: ${
           process.env.FRONTEND_URL || "http://localhost:5173"
@@ -119,7 +151,7 @@ const startServer = async () => {
       );
     });
   } catch (error) {
-    console.error("❌ Database connection error:", error);
+    console.error(`❌ Database connection error: ${error.message}`);
     process.exit(1);
   }
 };
